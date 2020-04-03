@@ -1,13 +1,6 @@
 #!/bin/sh
 
-docker_compose(){
-    docker-compose up -d
-    docker-compose run --rm server create_db
-}
-docker_compose &
-
-npm install
-npm run build
-npm run start
+docker-compose up -d
+docker-compose run --rm server create_db
 
 # https://redash.io/help/open-source/dev-guide/docker
