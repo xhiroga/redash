@@ -2,15 +2,17 @@ version: 2.0
 
 build-docker-image-job: &build-docker-image-job
   docker:
-    - image: circleci/node:8
+    - image: circleci/node:14.17
   steps:
-    - setup_remote_docker
+    - setup_remote_docker:
+        version: 19.03.13
     - checkout
     - run: sudo apt update
     - run: sudo apt install python3-pip
     - run: sudo pip3 install -r requirements_bundles.txt
     - run: .circleci/update_version
-    - run: npm run bundle
+    - run: sudo npm install --global --force yarn@1.22.10
+    - run: yarn bundle
     - run: .circleci/docker_build
 jobs:
   backend-lint:
@@ -27,13 +29,14 @@ jobs:
     docker:
       - image: circleci/buildpack-deps:xenial
     steps:
-      - setup_remote_docker
+      - setup_remote_docker:
+          version: 19.03.13
       - checkout
       - run:
           name: Build Docker Images
           command: |
             set -x
-            docker-compose build --build-arg skip_ds_deps=true
+            docker-compose build --build-arg skip_ds_deps=true --build-arg skip_frontend_build=true
             docker-compose up -d
             sleep 10
       - run:
@@ -57,27 +60,40 @@ jobs:
       - store_artifacts:
           path: coverage.xml
   frontend-lint:
+    environment:
+      CYPRESS_INSTALL_BINARY: 0
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 1
     docker:
-      - image: circleci/node:8
+      - image: circleci/node:14.17
     steps:
       - checkout
       - run: mkdir -p /tmp/test-results/eslint
-      - run: npm ci
-      - run: npm run lint:ci
+      - run: sudo npm install --global --force yarn@1.22.10
+      - run: yarn cache clean && yarn --frozen-lockfile --network-concurrency 1
+      - run: yarn lint:ci
       - store_test_results:
           path: /tmp/test-results
   frontend-unit-tests:
+    environment:
+      CYPRESS_INSTALL_BINARY: 0
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 1
     docker:
-      - image: circleci/node:8
+      - image: circleci/node:14.17
     steps:
       - checkout
       - run: sudo apt update
       - run: sudo apt install python3-pip
       - run: sudo pip3 install -r requirements_bundles.txt
-      - run: npm ci
-      - run: npm run bundle
-      - run: npm test
-      - run: npm run lint
+      - run: sudo npm install --global --force yarn@1.22.10
+      - run: yarn cache clean && yarn --frozen-lockfile --network-concurrency 1
+      - run: yarn bundle
+      - run:
+          name: Run App Tests
+          command: yarn test
+      - run:
+          name: Run Visualizations Tests
+          command: (cd viz-lib && yarn test)
+      - run: yarn lint
   frontend-e2e-tests:
     environment:
       COMPOSE_FILE: .circleci/docker-compose.cypress.yml
@@ -85,24 +101,46 @@ jobs:
       PERCY_TOKEN_ENCODED: ZGRiY2ZmZDQ0OTdjMzM5ZWE0ZGQzNTZiOWNkMDRjOTk4Zjg0ZjMxMWRmMDZiM2RjOTYxNDZhOGExMjI4ZDE3MA==
       CYPRESS_PROJECT_ID_ENCODED: OTI0Y2th
       CYPRESS_RECORD_KEY_ENCODED: YzA1OTIxMTUtYTA1Yy00NzQ2LWEyMDMtZmZjMDgwZGI2ODgx
+      CYPRESS_INSTALL_BINARY: 0
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 1
     docker:
-      - image: circleci/node:8
+      - image: circleci/node:14.17
     steps:
-      - setup_remote_docker
+      - setup_remote_docker:
+          version: 19.03.13
       - checkout
       - run:
-          name: Install npm dependencies
+          name: Enable Code Coverage report for master branch
           command: |
-            npm ci
+            if [ "$CIRCLE_BRANCH" = "master" ]; then
+              echo 'export CODE_COVERAGE=true' >> $BASH_ENV
+              source $BASH_ENV
+            fi
+      - run: sudo npm install --global --force yarn@1.22.10
+      - run:
+          name: Install frontend dependencies
+          command: yarn cache clean && yarn --frozen-lockfile --network-concurrency 1
       - run:
           name: Setup Redash server
           command: |
-            npm run cypress build
-            npm run cypress start -- --skip-db-seed
-            docker-compose run cypress npm run cypress db-seed
+            yarn cypress build
+            yarn cypress start -- --skip-db-seed
+            docker-compose run cypress yarn cypress db-seed
       - run:
           name: Execute Cypress tests
-          command: npm run cypress run-ci
+          command: yarn cypress run-ci
+      - run:
+          name: "Failure: output container logs to console"
+          command: |
+            docker-compose logs
+          when: on_fail
+      - run:
+          name: Copy Code Coverage results
+          command: |
+            docker cp cypress:/usr/src/app/coverage ./coverage || true
+          when: always
+      - store_artifacts:
+          path: coverage
   build-docker-image: *build-docker-image-job
   build-preview-docker-image: *build-docker-image-job
 workflows:

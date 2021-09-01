@@ -1,9 +1,10 @@
 import click
 import simplejson
 from flask import current_app
-from flask.cli import FlaskGroup, run_command
+from flask.cli import FlaskGroup, run_command, with_appcontext
+from rq import Connection
 
-from redash import __version__, create_app, settings
+from redash import __version__, create_app, settings, rq_redis_connection
 from redash.cli import data_sources, database, groups, organization, queries, users, rq
 from redash.monitor import get_status
 
@@ -44,7 +45,8 @@ def version():
 
 @manager.command()
 def status():
-    print(simplejson.dumps(get_status(), indent=2))
+    with Connection(rq_redis_connection):
+        print(simplejson.dumps(get_status(), indent=2))
 
 
 @manager.command()
@@ -73,23 +75,13 @@ def send_test_mail(email=None):
     )
 
 
-@manager.command()
-def ipython():
-    """Starts IPython shell instead of the default Python shell."""
+@manager.command("shell")
+@with_appcontext
+def shell():
     import sys
-    import IPython
+    from ptpython import repl
     from flask.globals import _app_ctx_stack
 
     app = _app_ctx_stack.top.app
 
-    banner = "Python %s on %s\nIPython: %s\nRedash version: %s\n" % (
-        sys.version,
-        sys.platform,
-        IPython.__version__,
-        __version__,
-    )
-
-    ctx = {}
-    ctx.update(app.make_shell_context())
-
-    IPython.embed(banner1=banner, user_ns=ctx)
+    repl.embed(globals=app.make_shell_context())
